@@ -1,0 +1,182 @@
+---
+# Namespace
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: sample-app
+  labels:
+    app.kubernetes.io/managed-by: argocd
+    project: devops-platform
+
+---
+# Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sample-app
+  namespace: sample-app
+  labels:
+    app: sample-app
+    version: v1
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: sample-app
+  template:
+    metadata:
+      labels:
+        app: sample-app
+        version: v1
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "80"
+    spec:
+      containers:
+        - name: sample-app
+          image: nginx:1.25-alpine
+          ports:
+            - containerPort: 80
+              name: http
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 100m
+              memory: 128Mi
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 80
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 80
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          volumeMounts:
+            - name: config
+              mountPath: /usr/share/nginx/html
+      volumes:
+        - name: config
+          configMap:
+            name: sample-app-config
+
+---
+# ConfigMap — custom HTML page showing platform info
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: sample-app-config
+  namespace: sample-app
+data:
+  index.html: |
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <title>DevOps Platform Foundation</title>
+      <style>
+        body { font-family: sans-serif; max-width: 600px; margin: 60px auto; color: #333; }
+        h1   { color: #0078D4; }
+        .tag { background: #E6F1FB; color: #185FA5; padding: 3px 10px;
+               border-radius: 12px; font-size: 13px; margin: 4px; display: inline-block; }
+        .box { border: 1px solid #eee; border-radius: 8px; padding: 16px; margin-top: 20px; }
+      </style>
+    </head>
+    <body>
+      <h1>DevOps Platform Foundation</h1>
+      <p>Deployed via <strong>ArgoCD GitOps</strong> on <strong>AKS</strong></p>
+      <div class="box">
+        <strong>Stack</strong><br><br>
+        <span class="tag">Terraform</span>
+        <span class="tag">AKS</span>
+        <span class="tag">ArgoCD</span>
+        <span class="tag">Prometheus</span>
+        <span class="tag">Grafana</span>
+        <span class="tag">Loki</span>
+      </div>
+      <div class="box">
+        <strong>GitOps in action</strong><br>
+        <p style="font-size:14px">
+          This page was deployed by pushing a manifest to GitHub.<br>
+          ArgoCD detected the change and synced it to AKS automatically.<br>
+          No kubectl apply was run manually.
+        </p>
+      </div>
+    </body>
+    </html>
+
+---
+# Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: sample-app
+  namespace: sample-app
+  labels:
+    app: sample-app
+spec:
+  selector:
+    app: sample-app
+  ports:
+    - name: http
+      port: 80
+      targetPort: 80
+  type: ClusterIP
+
+---
+# HorizontalPodAutoscaler
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: sample-app
+  namespace: sample-app
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: sample-app
+  minReplicas: 2
+  maxReplicas: 5
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+
+---
+# ArgoCD Application manifest
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: sample-app
+  namespace: argocd
+  labels:
+    project: devops-platform
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/vmprachi7/devops-platform-foundation
+    targetRevision: main
+    path: gitops/apps/sample-app
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: sample-app
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ApplyOutOfSyncOnly=true
+    retry:
+      limit: 3
+      backoff:
+        duration: 5s
+        factor: 2
+        maxDuration: 1m
