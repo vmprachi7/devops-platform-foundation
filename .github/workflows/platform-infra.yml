@@ -1,9 +1,3 @@
-##############################################################
-# FILE 1: .github/workflows/platform-infra.yml
-# Owns: Terraform + ArgoCD + Observability
-# Triggers: terraform/** or observability/** changes, or manual
-##############################################################
-
 name: Platform Infrastructure
 
 on:
@@ -27,10 +21,10 @@ on:
         default: apply
         type: choice
         options:
-          - apply               # full: terraform + argocd + observability
-          - observability-only  # skip terraform, just reinstall helm charts
-          - argocd-only         # skip terraform, just reinstall argocd
-          - destroy             # tear everything down
+          - apply
+          - observability-only
+          - argocd-only
+          - destroy
 
 env:
   TF_DIR:               terraform/environments/dev
@@ -38,6 +32,8 @@ env:
   ARM_CLIENT_SECRET:    ${{ secrets.ARM_CLIENT_SECRET }}
   ARM_TENANT_ID:        ${{ secrets.ARM_TENANT_ID }}
   ARM_SUBSCRIPTION_ID:  ${{ secrets.ARM_SUBSCRIPTION_ID }}
+  # Storage account key for Terraform remote state
+  ARM_ACCESS_KEY:       ${{ secrets.TF_STATE_STORAGE_KEY }}
   RESOURCE_GROUP:       devops-platform-rg
   CLUSTER_NAME:         devops-platform-aks
 
@@ -50,14 +46,18 @@ jobs:
     if: github.event_name == 'pull_request'
     permissions:
       pull-requests: write
+
     steps:
       - uses: actions/checkout@v4
-      - uses: hashicorp/setup-terraform@v3
-        with: { terraform_version: 1.6.6 }
 
-      - name: Init (no backend)
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.6.6
+
+      - name: Terraform Init
         working-directory: ${{ env.TF_DIR }}
-        run: terraform init -backend=false
+        run: terraform init
+        # ARM_ACCESS_KEY env var is set above — backend connects automatically
 
       - name: Format check
         working-directory: ${{ env.TF_DIR }}
@@ -70,9 +70,7 @@ jobs:
       - name: Plan
         id: plan
         working-directory: ${{ env.TF_DIR }}
-        run: |
-          terraform init
-          terraform plan -no-color 2>&1 | tee plan.txt
+        run: terraform plan -no-color 2>&1 | tee plan.txt
         continue-on-error: true
 
       - name: Comment plan on PR
@@ -82,7 +80,7 @@ jobs:
           script: |
             const fs   = require('fs');
             const plan = fs.readFileSync('${{ env.TF_DIR }}/plan.txt', 'utf8');
-            const body = `## 🏗️ Terraform Plan\n\`\`\`\n${plan.slice(0, 60000)}\n\`\`\`\n*by @${{ github.actor }}*`;
+            const body = `## 🏗️ Terraform Plan\n\`\`\`\n${plan.slice(0,60000)}\n\`\`\`\n*by @${{ github.actor }}*`;
             github.rest.issues.createComment({
               issue_number: context.issue.number,
               owner: context.repo.owner,
@@ -90,7 +88,7 @@ jobs:
               body
             });
 
-  # ── Apply: provision AKS infra ──────────────────────────
+  # ── Apply: provision AKS infra ───────────────────────────
   terraform-apply:
     name: Provision AKS Infrastructure
     runs-on: ubuntu-latest
@@ -98,33 +96,31 @@ jobs:
       (github.event_name == 'push') ||
       (github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'apply')
     environment: production
-    outputs:
-      cluster-ready: ${{ steps.verify.outputs.ready }}
+
     steps:
       - uses: actions/checkout@v4
+
       - uses: hashicorp/setup-terraform@v3
-        with: { terraform_version: 1.6.6, terraform_wrapper: false }
-
-      - name: Terraform Init + Apply
-        working-directory: ${{ env.TF_DIR }}
-        run: |
-          terraform init
-          terraform apply -auto-approve
-
-      - name: Get kubeconfig
-        uses: azure/login@v1
-        with: { creds: '${{ secrets.AZURE_CREDENTIALS }}' }
-
-      - uses: azure/aks-set-context@v3
         with:
-          resource-group: ${{ env.RESOURCE_GROUP }}
-          cluster-name:   ${{ env.CLUSTER_NAME }}
+          terraform_version:  1.6.6
+          terraform_wrapper:  false
 
-      - name: Verify cluster
-        id: verify
-        run: |
-          kubectl get nodes
-          echo "ready=true" >> $GITHUB_OUTPUT
+      - name: Terraform Init
+        working-directory: ${{ env.TF_DIR }}
+        run: terraform init
+        # Connects to Azure Blob backend using ARM_ACCESS_KEY
+
+      - name: Terraform Plan
+        working-directory: ${{ env.TF_DIR }}
+        run: terraform plan -no-color -out=tfplan
+
+      - name: Terraform Apply
+        working-directory: ${{ env.TF_DIR }}
+        run: terraform apply -auto-approve tfplan
+
+      - name: Show outputs
+        working-directory: ${{ env.TF_DIR }}
+        run: terraform output
 
   # ── Install ArgoCD ───────────────────────────────────────
   install-argocd:
@@ -132,16 +128,18 @@ jobs:
     runs-on: ubuntu-latest
     needs: terraform-apply
     if: |
-      always() &&
-      (needs.terraform-apply.result == 'success' ||
-       (github.event_name == 'workflow_dispatch' &&
-        (github.event.inputs.action == 'apply' ||
-         github.event.inputs.action == 'argocd-only')))
+      always() && (
+        needs.terraform-apply.result == 'success' ||
+        (github.event_name == 'workflow_dispatch' &&
+         contains(fromJson('["apply","argocd-only"]'), github.event.inputs.action))
+      )
+
     steps:
       - uses: actions/checkout@v4
 
       - uses: azure/login@v1
-        with: { creds: '${{ secrets.AZURE_CREDENTIALS }}' }
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
 
       - uses: azure/aks-set-context@v3
         with:
@@ -158,7 +156,7 @@ jobs:
             -n argocd --timeout=180s
           echo "✅ ArgoCD ready"
 
-      - name: Connect GitHub repo + register all apps
+      - name: Login to ArgoCD + register repos + apply app CRDs
         run: |
           PASS=$(kubectl -n argocd get secret argocd-initial-admin-secret \
             -o jsonpath="{.data.password}" | base64 -d)
@@ -169,25 +167,20 @@ jobs:
             https://github.com/argoproj/argo-cd/releases/latest/download/argocd-linux-amd64
           chmod +x /usr/local/bin/argocd
 
-          argocd login localhost:8080 --username admin \
-            --password "$PASS" --insecure
+          argocd login localhost:8080 \
+            --username admin --password "$PASS" --insecure
 
-          # Register platform-foundation repo
+          # Register platform repo
           argocd repo add https://github.com/${{ github.repository }} \
             --username ${{ github.repository_owner }} \
             --password ${{ secrets.GITHUB_TOKEN }} || true
 
-          # Register finops repo so ArgoCD can watch it
-          argocd repo add https://github.com/${{ github.repository_owner }}/finops-intelligence-engine \
-            --username ${{ github.repository_owner }} \
-            --password ${{ secrets.GITHUB_TOKEN }} || true
+          # Apply sample app ArgoCD Application CRDs
+          kubectl apply -f gitops/argocd-apps/sample-app-1.yaml
+          kubectl apply -f gitops/argocd-apps/sample-app-2.yaml
 
-          # Apply all ArgoCD Application CRDs
-          kubectl apply -f gitops/argocd-apps/ --recursive
-          echo "✅ All ArgoCD Applications registered"
-
-          # Show registered apps
           argocd app list
+          echo "✅ ArgoCD apps registered"
 
   # ── Install Observability ────────────────────────────────
   install-observability:
@@ -195,28 +188,23 @@ jobs:
     runs-on: ubuntu-latest
     needs: terraform-apply
     if: |
-      always() &&
-      (needs.terraform-apply.result == 'success' ||
-       (github.event_name == 'workflow_dispatch' &&
-        (github.event.inputs.action == 'apply' ||
-         github.event.inputs.action == 'observability-only')))
+      always() && (
+        needs.terraform-apply.result == 'success' ||
+        (github.event_name == 'workflow_dispatch' &&
+         contains(fromJson('["apply","observability-only"]'), github.event.inputs.action))
+      )
+
     steps:
       - uses: actions/checkout@v4
 
       - uses: azure/login@v1
-        with: { creds: '${{ secrets.AZURE_CREDENTIALS }}' }
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
 
       - uses: azure/aks-set-context@v3
         with:
           resource-group: ${{ env.RESOURCE_GROUP }}
           cluster-name:   ${{ env.CLUSTER_NAME }}
-
-      - name: Add Helm repos
-        run: |
-          helm repo add prometheus-community \
-            https://prometheus-community.github.io/helm-charts
-          helm repo add grafana https://grafana.github.io/helm-charts
-          helm repo update
 
       - name: Install metrics-server (required for HPA)
         run: |
@@ -226,6 +214,13 @@ jobs:
             -l k8s-app=metrics-server \
             -n kube-system --timeout=60s || true
           echo "✅ metrics-server ready"
+
+      - name: Add Helm repos
+        run: |
+          helm repo add prometheus-community \
+            https://prometheus-community.github.io/helm-charts
+          helm repo add grafana https://grafana.github.io/helm-charts
+          helm repo update
 
       - name: Install Prometheus + Grafana
         run: |
@@ -247,32 +242,33 @@ jobs:
 
       - name: Print access instructions
         run: |
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          echo "  Access Grafana locally:"
-          echo "  kubectl port-forward -n monitoring svc/kube-prometheus-stack-grafana 3000:80"
-          echo "  Open: http://localhost:3000  admin / admin123"
-          echo ""
-          echo "  Access ArgoCD locally:"
-          echo "  kubectl port-forward svc/argocd-server -n argocd 8080:443"
-          echo "  Open: https://localhost:8080  admin / (from: argocd admin initial-password -n argocd)"
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "  Grafana: kubectl port-forward -n monitoring svc/kube-prometheus-stack-grafana 3000:80"
+          echo "  Open:    http://localhost:3000   admin / admin123"
+          echo "  ArgoCD:  kubectl port-forward svc/argocd-server -n argocd 8080:443"
+          echo "  Open:    https://localhost:8080  admin / (argocd admin initial-password -n argocd)"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
   # ── Destroy (manual only) ────────────────────────────────
   terraform-destroy:
-    name: Destroy All Infrastructure
+    name: Destroy Infrastructure
     runs-on: ubuntu-latest
     if: |
       github.event_name == 'workflow_dispatch' &&
       github.event.inputs.action == 'destroy'
     environment: production
+
     steps:
       - uses: actions/checkout@v4
+
       - uses: hashicorp/setup-terraform@v3
-        with: { terraform_version: 1.6.6 }
-      - name: Terraform Destroy
+        with:
+          terraform_version: 1.6.6
+
+      - name: Terraform Init + Destroy
         working-directory: ${{ env.TF_DIR }}
         run: |
           terraform init
           terraform destroy -auto-approve
-          echo "✅ All infrastructure destroyed"
-
+          echo "✅ Infrastructure destroyed"
+          echo "State file preserved in Azure Blob — safe to recreate"

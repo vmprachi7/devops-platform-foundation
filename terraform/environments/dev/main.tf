@@ -1,3 +1,6 @@
+# terraform/environments/dev/main.tf
+# Backend config moved to backend.tf
+
 terraform {
   required_providers {
     azurerm = {
@@ -5,27 +8,21 @@ terraform {
       version = "~> 3.85"
     }
   }
+  required_version = ">= 1.6.0"
 }
 
 provider "azurerm" {
   features {}
 }
 
+# ── Resource Group ───────────────────────────────────────────
 resource "azurerm_resource_group" "main" {
   name     = var.resource_group_name
   location = var.location
   tags     = var.tags
 }
 
-resource "azurerm_container_registry" "acr" {
-  name                = var.acr_name
-  resource_group_name = azurerm_resource_group.main.name
-  location            = azurerm_resource_group.main.location
-  sku                 = "Basic"
-  admin_enabled       = false
-  tags                = var.tags
-}
-
+# ── Log Analytics (must exist before AKS) ───────────────────
 resource "azurerm_log_analytics_workspace" "main" {
   name                = "${var.cluster_name}-logs"
   location            = azurerm_resource_group.main.location
@@ -35,22 +32,35 @@ resource "azurerm_log_analytics_workspace" "main" {
   tags                = var.tags
 }
 
+# ── Azure Container Registry ─────────────────────────────────
+resource "azurerm_container_registry" "acr" {
+  name                = var.acr_name
+  resource_group_name = azurerm_resource_group.main.name
+  location            = azurerm_resource_group.main.location
+  sku                 = "Basic"
+  admin_enabled       = false
+  tags                = var.tags
+}
+
+# ── AKS Cluster ─────────────────────────────────────────────
 resource "azurerm_kubernetes_cluster" "aks" {
   name                = var.cluster_name
   location            = azurerm_resource_group.main.location
   resource_group_name = azurerm_resource_group.main.name
   dns_prefix          = var.cluster_name
-  kubernetes_version  = "1.35"
+  kubernetes_version  = "1.28"
   tags                = var.tags
 
   default_node_pool {
     name            = "system"
     node_count      = 1
-    vm_size         = "Standard_B2s_v2"
+    vm_size         = "Standard_B2s"
     os_disk_size_gb = 30
   }
 
-  identity { type = "SystemAssigned" }
+  identity {
+    type = "SystemAssigned"
+  }
 
   network_profile {
     network_plugin    = "azure"
@@ -62,6 +72,8 @@ resource "azurerm_kubernetes_cluster" "aks" {
   }
 }
 
+# ── AKS → ACR role assignment ────────────────────────────────
+# Allows AKS to pull images from ACR without credentials
 resource "azurerm_role_assignment" "aks_acr" {
   principal_id                     = azurerm_kubernetes_cluster.aks.kubelet_identity[0].object_id
   role_definition_name             = "AcrPull"
