@@ -1,0 +1,16 @@
+grafana:
+  adminPassword: "admin123"
+  persistence:
+    enabled: false
+  sidecar:
+    dashboards:
+      enabled: true
+prometheus:
+  prometheusSpec:
+    retention: 7d
+    resources:
+      requests:
+        cpu:    200m
+        memory: 400Mi
+alertmanager:
+  enabled: true

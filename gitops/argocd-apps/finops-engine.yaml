@@ -1,0 +1,23 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: finops-engine
+  namespace: argocd
+  labels:
+    project: devops-platform
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/your-actual-github-username/devops-platform-foundation
+    targetRevision: main
+    path: apps/finops-engine
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: finops-engine
+  syncPolicy:
+    automated:
+      prune:    true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ApplyOutOfSyncOnly=true
