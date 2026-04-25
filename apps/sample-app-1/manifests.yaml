@@ -1,0 +1,205 @@
+---
+# ── Namespace ────────────────────────────────────────────────
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: sample-app-1
+  labels:
+    app.kubernetes.io/managed-by: argocd
+    project: devops-platform
+    demo: hpa-autoscaling
+
+---
+# ── ConfigMap — custom HTML showing HPA info ─────────────────
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: sample-app-1-html
+  namespace: sample-app-1
+data:
+  index.html: |
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <title>Sample App 1 — HPA Demo</title>
+      <style>
+        body { font-family: sans-serif; max-width: 640px; margin: 60px auto; color: #1a1a1a; }
+        h1   { color: #0078D4; margin-bottom: 4px; }
+        .sub { color: #666; font-size: 14px; margin-bottom: 28px; }
+        .box { border: 1px solid #e0e0e0; border-radius: 8px; padding: 18px 20px; margin: 12px 0; }
+        .tag { display: inline-block; font-size: 11px; font-weight: 500; padding: 3px 10px;
+               border-radius: 20px; margin: 3px; }
+        .t-blue   { background: #E6F1FB; color: #185FA5; }
+        .t-green  { background: #E6F7EE; color: #1A7F48; }
+        .t-orange { background: #FFF0E0; color: #B35800; }
+        code { background: #f4f4f4; padding: 2px 6px; border-radius: 4px; font-size: 13px; }
+        .metric { display: flex; justify-content: space-between; padding: 6px 0;
+                  border-bottom: 1px solid #f0f0f0; font-size: 14px; }
+        .metric:last-child { border-bottom: none; }
+      </style>
+    </head>
+    <body>
+      <h1>Sample App 1</h1>
+      <p class="sub">Horizontal Pod Autoscaler (HPA) Demo · Deployed via ArgoCD GitOps</p>
+
+      <div class="box">
+        <strong>What this demonstrates</strong><br><br>
+        <span class="tag t-blue">GitOps</span>
+        <span class="tag t-green">HPA Autoscaling</span>
+        <span class="tag t-orange">Kubernetes</span>
+        <p style="font-size:14px; margin-top:12px; line-height:1.6">
+          This app scales automatically between <strong>2 and 6 replicas</strong>
+          based on CPU utilisation. When CPU exceeds 50%, Kubernetes adds pods.
+          When load drops, pods are removed. Run the load test to see it live.
+        </p>
+      </div>
+
+      <div class="box">
+        <strong>HPA Configuration</strong>
+        <div class="metric"><span>Min replicas</span><span>2</span></div>
+        <div class="metric"><span>Max replicas</span><span>6</span></div>
+        <div class="metric"><span>Scale-up trigger</span><span>CPU > 50%</span></div>
+        <div class="metric"><span>Scale-down stabilisation</span><span>60 seconds</span></div>
+        <div class="metric"><span>Resource requests</span><span>50m CPU · 64Mi RAM</span></div>
+      </div>
+
+      <div class="box">
+        <strong>Watch it scale</strong>
+        <p style="font-size:13px; line-height:1.6">
+          Run the load test: <code>bash load-test.sh</code><br>
+          Then watch: <code>kubectl get hpa -n sample-app-1 -w</code><br>
+          And pods:   <code>kubectl get pods -n sample-app-1 -w</code>
+        </p>
+      </div>
+
+      <div class="box">
+        <strong>GitOps flow</strong>
+        <p style="font-size:13px; line-height:1.6">
+          This page was deployed by pushing a manifest to GitHub.<br>
+          ArgoCD detected the change and synced it to AKS automatically.<br>
+          No <code>kubectl apply</code> was run manually.
+        </p>
+      </div>
+    </body>
+    </html>
+
+---
+# ── Deployment ───────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sample-app-1
+  namespace: sample-app-1
+  labels:
+    app:     sample-app-1
+    version: stable
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: sample-app-1
+  template:
+    metadata:
+      labels:
+        app:     sample-app-1
+        version: stable
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port:   "80"
+    spec:
+      containers:
+        - name: app
+          image: nginx:1.25-alpine
+          ports:
+            - containerPort: 80
+              name: http
+          # CPU resource requests are REQUIRED for HPA to work
+          resources:
+            requests:
+              cpu:    50m
+              memory: 64Mi
+            limits:
+              cpu:    200m
+              memory: 128Mi
+          livenessProbe:
+            httpGet: { path: /, port: 80 }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          readinessProbe:
+            httpGet: { path: /, port: 80 }
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          volumeMounts:
+            - name: html
+              mountPath: /usr/share/nginx/html
+      volumes:
+        - name: html
+          configMap:
+            name: sample-app-1-html
+
+---
+# ── Service ──────────────────────────────────────────────────
+apiVersion: v1
+kind: Service
+metadata:
+  name: sample-app-1
+  namespace: sample-app-1
+  labels:
+    app: sample-app-1
+spec:
+  selector:
+    app: sample-app-1
+  ports:
+    - name: http
+      port:       80
+      targetPort: 80
+  type: ClusterIP
+
+---
+# ── HorizontalPodAutoscaler ──────────────────────────────────
+# This is the star of the show — watches CPU, scales pods
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: sample-app-1
+  namespace: sample-app-1
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: sample-app-1
+  minReplicas: 2
+  maxReplicas: 6
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type:               AverageUtilization
+          averageUtilization: 50
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 0       # scale up immediately
+      policies:
+        - type:          Pods
+          value:         2
+          periodSeconds: 15               # add max 2 pods per 15s
+    scaleDown:
+      stabilizationWindowSeconds: 60      # wait 60s before scaling down
+      policies:
+        - type:          Pods
+          value:         1
+          periodSeconds: 30               # remove max 1 pod per 30s
+
+---
+# ── PodDisruptionBudget — ensures zero downtime during scaling ─
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: sample-app-1
+  namespace: sample-app-1
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: sample-app-1

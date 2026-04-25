@@ -221,7 +221,7 @@ az --version && terraform --version && kubectl version --client && helm version
 ### Step 1 — Clone repo
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/devops-platform-foundation.git
+git clone https://github.com/vmprachi7/devops-platform-foundation.git
 cd devops-platform-foundation
 ```
 
@@ -301,8 +301,8 @@ Open `https://localhost:8080` — username: `admin`, password from above command
 argocd login localhost:8080 --username admin --insecure
 
 # Connect GitHub repo
-argocd repo add https://github.com/YOUR_USERNAME/devops-platform-foundation \
-  --username YOUR_USERNAME \
+argocd repo add https://github.com/vmprachi7/devops-platform-foundation \
+  --username vmprachi7 \
   --password YOUR_GITHUB_PAT
 ```
 
@@ -506,7 +506,7 @@ kubectl port-forward -n monitoring \
 
 ```bash
 # Check latest workflow run
-# Go to: github.com/YOUR_USERNAME/devops-platform-foundation/actions
+# Go to: github.com/vmprachi7/devops-platform-foundation/actions
 # EXPECTED: green checkmarks on all jobs
 ```
 
@@ -569,7 +569,7 @@ Why: shows metrics pipeline is healthy end to end
 
 ### Screenshot 8 — GitHub Actions — successful pipeline run
 ```
-Where: github.com/YOUR_USERNAME/devops-platform-foundation → Actions tab
+Where: github.com/vmprachi7/devops-platform-foundation → Actions tab
 What to capture: green checkmarks on all 4 jobs (validate, plan, apply, k8s-validate)
 Why: shows CI/CD automation — not just infrastructure, but delivery automation
 ```

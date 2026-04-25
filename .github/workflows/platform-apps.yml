@@ -1,0 +1,170 @@
+
+##############################################################
+# FILE 2: .github/workflows/platform-apps.yml
+# Owns: sample-app-1 and sample-app-2 ONLY
+# Triggers: apps/** changes only
+# External apps (finops-engine etc) are deployed by their own repo
+##############################################################
+
+name: Platform Sample Apps
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'apps/**'
+      - 'gitops/argocd-apps/**'
+      - '.github/workflows/platform-apps.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'apps/**'
+  workflow_dispatch:
+    inputs:
+      app:
+        description: 'App to deploy (sample-app-1 or sample-app-2 or all)'
+        required: true
+        default: all
+        type: choice
+        options: [all, sample-app-1, sample-app-2]
+
+env:
+  RESOURCE_GROUP: devops-platform-rg
+  CLUSTER_NAME:   devops-platform-aks
+
+jobs:
+
+  # ── Detect which sample apps changed ────────────────────
+  detect:
+    name: Detect Changed Apps
+    runs-on: ubuntu-latest
+    outputs:
+      apps:       ${{ steps.detect.outputs.apps }}
+      has-change: ${{ steps.detect.outputs.has-change }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 2 }
+
+      - name: Detect
+        id: detect
+        run: |
+          INPUT="${{ github.event.inputs.app }}"
+
+          if [ "$INPUT" = "all" ] || [ "$INPUT" = "" ]; then
+            if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+              APPS='["sample-app-1","sample-app-2"]'
+            else
+              # Auto-detect from git diff
+              CHANGED=$(git diff --name-only HEAD~1 HEAD | \
+                grep '^apps/' | cut -d'/' -f2 | sort -u | \
+                grep -E '^sample-app-' | \
+                jq -R . | jq -sc .)
+              APPS=$CHANGED
+            fi
+          else
+            APPS='["'"$INPUT"'"]'
+          fi
+
+          if [ "$APPS" = "[]" ] || [ -z "$APPS" ]; then
+            echo "has-change=false" >> $GITHUB_OUTPUT
+            echo "apps=[]"          >> $GITHUB_OUTPUT
+          else
+            echo "has-change=true"  >> $GITHUB_OUTPUT
+            echo "apps=$APPS"       >> $GITHUB_OUTPUT
+            echo "Will deploy: $APPS"
+          fi
+
+  # ── Validate manifests on PR ────────────────────────────
+  validate:
+    name: Validate Manifests
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install kubeconform
+        run: |
+          curl -sL \
+            https://github.com/yannh/kubeconform/releases/latest/download/kubeconform-linux-amd64.tar.gz \
+            | tar xz
+          sudo mv kubeconform /usr/local/bin/
+
+      - name: Validate sample-app-1
+        run: |
+          kubeconform -strict -ignore-missing-schemas \
+            apps/sample-app-1/manifests.yaml
+          echo "✅ sample-app-1 valid"
+
+      - name: Validate sample-app-2
+        run: |
+          kubeconform -strict -ignore-missing-schemas \
+            apps/sample-app-2/manifests.yaml
+          echo "✅ sample-app-2 valid"
+
+  # ── Deploy changed apps ──────────────────────────────────
+  deploy:
+    name: Deploy ${{ matrix.app }}
+    runs-on: ubuntu-latest
+    needs: detect
+    if: |
+      needs.detect.outputs.has-change == 'true' &&
+      github.ref == 'refs/heads/main'
+    environment: production
+    strategy:
+      matrix:
+        app: ${{ fromJson(needs.detect.outputs.apps) }}
+      fail-fast: false   # deploy apps in parallel, don't stop if one fails
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: azure/login@v1
+        with: { creds: '${{ secrets.AZURE_CREDENTIALS }}' }
+
+      - uses: azure/aks-set-context@v3
+        with:
+          resource-group: ${{ env.RESOURCE_GROUP }}
+          cluster-name:   ${{ env.CLUSTER_NAME }}
+
+      - name: Apply ${{ matrix.app }} manifests
+        run: |
+          echo "📦 Deploying ${{ matrix.app }}..."
+          kubectl apply -f apps/${{ matrix.app }}/ --recursive
+          echo "✅ Manifests applied"
+
+      - name: Trigger ArgoCD sync
+        run: |
+          curl -sSL -o /usr/local/bin/argocd \
+            https://github.com/argoproj/argo-cd/releases/latest/download/argocd-linux-amd64
+          chmod +x /usr/local/bin/argocd
+
+          PASS=$(kubectl -n argocd get secret argocd-initial-admin-secret \
+            -o jsonpath="{.data.password}" | base64 -d)
+          kubectl port-forward svc/argocd-server -n argocd 8080:443 &
+          sleep 8
+
+          argocd login localhost:8080 --username admin \
+            --password "$PASS" --insecure
+
+          argocd app sync ${{ matrix.app }} --timeout 90 || true
+          echo "✅ ArgoCD sync triggered"
+
+      - name: Verify pods healthy
+        run: |
+          NS="${{ matrix.app }}"
+          kubectl wait --for=condition=ready pod \
+            -l app=${{ matrix.app }} \
+            -n $NS \
+            --timeout=90s
+          kubectl get pods -n $NS
+          kubectl get hpa  -n $NS 2>/dev/null || true
+
+      - name: Job summary
+        if: always()
+        run: |
+          NS="${{ matrix.app }}"
+          echo "## ✅ ${{ matrix.app }} deployed" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          kubectl get pods -n $NS >> $GITHUB_STEP_SUMMARY
+          kubectl get hpa  -n $NS >> $GITHUB_STEP_SUMMARY 2>/dev/null || true
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
