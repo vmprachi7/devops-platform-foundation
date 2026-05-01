@@ -225,8 +225,6 @@ jobs:
           kubectl apply --server-side --force-conflicts \
             -f observability/metrics-server.yaml
 
-          kubectl wait --for=condition=ready pod -l k8s-app=metrics-server -n kube-system --timeout=180s
-
           echo "✅ metrics-server ready"
 
       - name: Add Helm repos
