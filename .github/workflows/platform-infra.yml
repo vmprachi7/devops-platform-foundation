@@ -222,11 +222,18 @@ jobs:
 
       - name: Install metrics-server
         run: |
+          # 1. Download the manifest
           curl -L https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml -o metrics-server.yaml
-          # Match the limit to the request (200Mi)
+          
+          # 2. Force the memory limit to 200Mi (matching the request)
           sed -i 's/memory: 104Mi/memory: 200Mi/g' metrics-server.yaml
-          kubectl apply -f metrics-server.yaml
+          
+          # 3. Apply using server-side to bypass validation issues
+          kubectl apply --server-side --force-conflicts -f metrics-server.yaml
+          
+          # 4. Wait for it to be ready
           kubectl wait --for=condition=ready pod -l k8s-app=metrics-server -n kube-system --timeout=60s
+          echo "✅ metrics-server ready"
 
 
 
