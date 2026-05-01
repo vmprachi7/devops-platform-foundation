@@ -158,12 +158,14 @@ jobs:
       - name: Install ArgoCD
         run: |
           kubectl create namespace argocd --dry-run=client -o yaml | kubectl apply -f -
-          kubectl apply -n argocd \
+          # Added --server-side to handle large CRDs like ApplicationSets
+          kubectl apply --server-side -n argocd \
             -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
           kubectl wait --for=condition=ready pod \
             -l app.kubernetes.io/name=argocd-server \
             -n argocd --timeout=180s
           echo "✅ ArgoCD ready"
+
 
       - name: Login to ArgoCD + register repos + apply app CRDs
         run: |
