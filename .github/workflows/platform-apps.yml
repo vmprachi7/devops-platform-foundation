@@ -28,6 +28,11 @@ on:
         type: choice
         options: [all, sample-app-1, sample-app-2]
 
+
+permissions:
+  id-token: write  # This is required for requesting the JWT
+  contents: read   # This is required for actions/checkout
+
 env:
   RESOURCE_GROUP: devops-platform-rg
   CLUSTER_NAME:   devops-platform-aks
