@@ -238,16 +238,14 @@ jobs:
         run: |
           kubectl create namespace monitoring --dry-run=client -o yaml | kubectl apply -f -
           
-          # Add the --atomic flag to ensure clean rollback on failure
-          # Increase timeout to 10m for large CRD installations
           helm upgrade --install kube-prometheus-stack \
             prometheus-community/kube-prometheus-stack \
             --namespace monitoring \
             --values observability/prometheus/values.yaml \
             --atomic \
-            --wait --timeout 10m \
-            --set prometheusOperator.admissionWebhooks.patch.image.pullPolicy=IfNotPresent
-            
+            --cleanup-on-fail \
+            --force \
+            --wait --timeout 15m
           echo "✅ Prometheus + Grafana ready"
 
       - name: Install Loki
