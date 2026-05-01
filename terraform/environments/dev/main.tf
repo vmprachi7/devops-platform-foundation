@@ -39,7 +39,6 @@ resource "azurerm_container_registry" "acr" {
   location            = azurerm_resource_group.main.location
   sku                 = "Basic"
   admin_enabled       = false
-  oidc_issuer_enabled = true
   tags                = var.tags
 }
 
@@ -51,7 +50,7 @@ resource "azurerm_kubernetes_cluster" "aks" {
   dns_prefix          = var.cluster_name
   kubernetes_version  = "1.34"
   tags                = var.tags
-
+  oidc_issuer_enabled = true
   default_node_pool {
     name            = "system"
     node_count      = 1
