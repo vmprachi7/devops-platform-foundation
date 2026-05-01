@@ -221,62 +221,50 @@ jobs:
           cluster-name:   ${{ env.CLUSTER_NAME }}
       - name: Install metrics-server
         run: |
-          curl -sL https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml \
-            -o metrics-server.yaml
+          curl -sL https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml -o metrics-server.yaml
 
-          python3 - <<'EOF'
-            import yaml
-            
-            with open("metrics-server.yaml") as f:
-                raw = f.read()
-            
-            docs = list(yaml.safe_load_all(raw))
-            patched = 0
-            
-            for doc in docs:
-                if not doc or doc.get("kind") != "Deployment":
-                    continue
-            
-                # Walk every container — both regular and init containers
-                all_containers = (
-                    doc["spec"]["template"]["spec"].get("containers", []) +
-                    doc["spec"]["template"]["spec"].get("initContainers", [])
-                )
-            
-                for c in all_containers:
-                    # Add --kubelet-insecure-tls to args
-                    args = c.get("args", [])
-                    if "--kubelet-insecure-tls" not in args:
-                        args.append("--kubelet-insecure-tls")
-                        c["args"] = args
-            
-                    # Remove memory limit entirely from ALL containers
-                    resources = c.get("resources", {})
-                    limits    = resources.get("limits", {})
-                    if "memory" in limits:
-                        del limits["memory"]
-                        resources["limits"] = limits
-                        c["resources"]      = resources
-                        patched += 1
-                        print(f"  Patched container: {c.get('name','unknown')} — removed memory limit")
-            
-            print(f"✅ Patched {patched} container(s)")
-            
-            with open("metrics-server-patched.yaml", "w") as f:
-                yaml.dump_all(docs, f, default_flow_style=False)
-            EOF
-            
-                      # Confirm patch worked — should show NO memory limits
-                      echo "--- Verifying no memory limits remain ---"
-                      grep -n "memory:" metrics-server-patched.yaml || echo "No memory limits found ✅"
-            
-                      kubectl apply --server-side --force-conflicts -f metrics-server-patched.yaml
-            
-                      kubectl wait --for=condition=ready pod \
-                        -l k8s-app=metrics-server \
-                        -n kube-system --timeout=120s
-            
-                      echo "✅ metrics-server ready"
+          python3 <<'EOF'
+          import yaml
+          import sys
+
+          with open("metrics-server.yaml") as f:
+              docs = list(yaml.safe_load_all(f))
+
+          patched = 0
+          for doc in docs:
+              if not doc or doc.get("kind") != "Deployment":
+                  continue
+
+              spec = doc["spec"]["template"]["spec"]
+              containers = spec.get("containers", []) + spec.get("initContainers", [])
+
+              for c in containers:
+                  # 1. Add insecure flag
+                  args = c.get("args", [])
+                  if "--kubelet-insecure-tls" not in args:
+                      args.append("--kubelet-insecure-tls")
+                      c["args"] = args
+                  
+                  # 2. Fix the resources
+                  res = c.get("resources", {})
+                  limits = res.get("limits", {})
+                  if "memory" in limits:
+                      del limits["memory"]
+                      patched += 1
+                      print(f"Patched container: {c.get('name')}")
+
+          with open("metrics-server-patched.yaml", "w") as f:
+              yaml.dump_all(docs, f)
+
+          print(f"✅ Patched {patched} container(s)")
+          EOF
+
+          kubectl apply --server-side --force-conflicts -f metrics-server-patched.yaml
+          
+          kubectl wait --for=condition=ready pod \
+            -l k8s-app=metrics-server \
+            -n kube-system --timeout=120s
+
             
 
       - name: Add Helm repos
