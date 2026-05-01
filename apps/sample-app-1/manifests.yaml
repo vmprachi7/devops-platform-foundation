@@ -175,7 +175,7 @@ spec:
       resource:
         name: cpu
         target:
-          type:               AverageUtilization
+          type:               Utilization
           averageUtilization: 50
   behavior:
     scaleUp:
