@@ -248,8 +248,10 @@ jobs:
         run: |
           helm upgrade --install loki grafana/loki-stack \
             --namespace monitoring \
+            --create-namespace \
             --values observability/loki/values.yaml \
-            --wait --timeout 3m
+            --atomic \
+            --wait --timeout 10m
           echo "✅ Loki ready"
 
       - name: Print access instructions
