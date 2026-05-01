@@ -225,18 +225,16 @@ jobs:
           kubectl apply --server-side --force-conflicts \
             -f observability/metrics-server.yaml
 
-          kubectl wait --for=condition=ready pod \
-            -l k8s-app=metrics-server \
-            -n kube-system --timeout=120s
+          kubectl wait --for=condition=ready pod -l k8s-app=metrics-server -n kube-system --timeout=180s
 
           echo "✅ metrics-server ready"
 
-          - name: Add Helm repos
-            run: |
-              helm repo add prometheus-community \
-                https://prometheus-community.github.io/helm-charts
-              helm repo add grafana https://grafana.github.io/helm-charts
-              helm repo update
+      - name: Add Helm repos
+        run: |
+          helm repo add prometheus-community \
+            https://prometheus-community.github.io/helm-charts
+          helm repo add grafana https://grafana.github.io/helm-charts
+          helm repo update
 
       - name: Install Prometheus + Grafana
         run: |
