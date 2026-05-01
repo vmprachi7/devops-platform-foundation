@@ -220,20 +220,14 @@ jobs:
           resource-group: ${{ env.RESOURCE_GROUP }}
           cluster-name:   ${{ env.CLUSTER_NAME }}
 
-      - name: Install metrics-server (required for HPA)
+      - name: Install metrics-server
         run: |
-          # Download the manifest locally first
           curl -L https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml -o metrics-server.yaml
-          
-          # Patch the memory limit to be at least equal to the request (200Mi)
+          # Match the limit to the request (200Mi)
           sed -i 's/memory: 104Mi/memory: 200Mi/g' metrics-server.yaml
-          
           kubectl apply -f metrics-server.yaml
-          
-          kubectl wait --for=condition=ready pod \
-            -l k8s-app=metrics-server \
-            -n kube-system --timeout=60s || true
-          echo "✅ metrics-server ready"
+          kubectl wait --for=condition=ready pod -l k8s-app=metrics-server -n kube-system --timeout=60s
+
 
 
       - name: Add Helm repos
