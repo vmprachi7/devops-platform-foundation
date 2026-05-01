@@ -26,6 +26,11 @@ on:
           - argocd-only
           - destroy
 
+permissions:
+  id-token: write  # This is required for requesting the JWT
+  contents: read   # This is required for actions/checkout
+
+
 env:
   TF_DIR:               terraform/environments/dev
   ARM_CLIENT_ID:        ${{ secrets.ARM_CLIENT_ID }}
