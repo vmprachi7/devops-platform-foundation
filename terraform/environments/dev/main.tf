@@ -39,6 +39,7 @@ resource "azurerm_container_registry" "acr" {
   location            = azurerm_resource_group.main.location
   sku                 = "Basic"
   admin_enabled       = false
+  oidc_issuer_enabled = true
   tags                = var.tags
 }
 
