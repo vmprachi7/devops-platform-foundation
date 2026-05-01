@@ -139,7 +139,7 @@ jobs:
 
       - uses: azure/login@v1
         with:
-          creds: ${{ secrets.AZURE_CREDENTIALS }}
+          creds: ${{ secrets.ARM_CLIENT_ID }}
 
       - uses: azure/aks-set-context@v3
         with:
