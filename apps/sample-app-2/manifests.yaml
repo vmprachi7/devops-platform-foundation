@@ -1,4 +1,8 @@
-# ── Namespace ────────────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════
+# SAMPLE APP 2 — CANARY DEPLOYMENT (50/50 SPLIT)
+# ═══════════════════════════════════════════════════════════════
+
+---
 apiVersion: v1
 kind: Namespace
 metadata:
@@ -9,24 +13,23 @@ metadata:
     demo: canary-deployment
 
 ---
-# ── Shared Service ───────────────────────────────────────────
-# No changes needed here. It still selects 'app: sample-app-2'
 apiVersion: v1
 kind: Service
 metadata:
   name: sample-app-2
   namespace: sample-app-2
+  labels:
+    app: sample-app-2
 spec:
   selector:
-    app: sample-app-2
+    app: sample-app-2   # Matches pods from both deployments
   ports:
     - name: http
-      port: 80
+      port:       80
       targetPort: 80
   type: ClusterIP
 
 ---
-# ── ConfigMap: Stable version HTML ───────────────────────────
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -34,10 +37,25 @@ metadata:
   namespace: sample-app-2
 data:
   index.html: |
-    <html><body style="background:#E6F7EE;"><h1>Stable v1.0 (50% Traffic)</h1></body></html>
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <title>Sample App 2 — Stable v1.0</title>
+      <style>
+        body { font-family: sans-serif; max-width: 640px; margin: 60px auto; color: #1a1a1a; }
+        h1   { color: #1A7F48; }
+        .badge { display: inline-block; background: #E6F7EE; color: #1A7F48; font-size: 12px; font-weight: 600; padding: 4px 12px; border-radius: 20px; margin-bottom: 20px; }
+        .box { border: 1px solid #e0e0e0; border-radius: 8px; padding: 18px 20px; margin: 12px 0; }
+      </style>
+    </head>
+    <body>
+      <h1>Sample App 2</h1>
+      <span class="badge">✅ STABLE — v1.0</span>
+      <div class="box"><strong>Traffic Status:</strong> 50% split (2 of 4 pods)</div>
+    </body>
+    </html>
 
 ---
-# ── ConfigMap: Canary version HTML ───────────────────────────
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -45,26 +63,43 @@ metadata:
   namespace: sample-app-2
 data:
   index.html: |
-    <html><body style="background:#FFFBF5;"><h1>Canary v2.0 (50% Traffic)</h1></body></html>
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <title>Sample App 2 — Canary v2.0</title>
+      <style>
+        body { font-family: sans-serif; max-width: 640px; margin: 60px auto; color: #1a1a1a; }
+        h1   { color: #B35800; }
+        .badge { display: inline-block; background: #FFF0E0; color: #B35800; font-size: 12px; font-weight: 600; padding: 4px 12px; border-radius: 20px; margin-bottom: 20px; }
+        .box { border: 1px solid #FFD9AA; border-radius: 8px; padding: 18px 20px; margin: 12px 0; background: #FFFBF5; }
+      </style>
+    </head>
+    <body>
+      <h1>Sample App 2</h1>
+      <span class="badge">🐤 CANARY — v2.0</span>
+      <div class="box"><strong>Traffic Status:</strong> 50% split (2 of 4 pods)</div>
+    </body>
+    </html>
 
 ---
-# ── Stable Deployment (v1.0) ────────────────────────────────
+# ── Stable Deployment (v1.0) ──
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: sample-app-2-stable
   namespace: sample-app-2
 spec:
-  replicas: 2     # <--- CHANGED FROM 4 TO 2
+  replicas: 2     # <--- CHANGED TO 2
   selector:
     matchLabels:
-      app: sample-app-2
+      app:   sample-app-2
       track: stable
   template:
     metadata:
       labels:
-        app: sample-app-2
-        track: stable
+        app:     sample-app-2
+        track:   stable
+        version: v1.0
     spec:
       containers:
         - name: app
@@ -78,23 +113,24 @@ spec:
             name: sample-app-2-stable-html
 
 ---
-# ── Canary Deployment (v2.0) ────────────────────────────────
+# ── Canary Deployment (v2.0) ──
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: sample-app-2-canary
   namespace: sample-app-2
 spec:
-  replicas: 2     # <--- CHANGED FROM 1 TO 2
+  replicas: 2     # <--- CHANGED TO 2
   selector:
     matchLabels:
-      app: sample-app-2
+      app:   sample-app-2
       track: canary
   template:
     metadata:
       labels:
-        app: sample-app-2
-        track: canary
+        app:     sample-app-2
+        track:   canary
+        version: v2.0
     spec:
       containers:
         - name: app
