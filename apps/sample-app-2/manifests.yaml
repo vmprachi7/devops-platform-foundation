@@ -240,7 +240,7 @@ metadata:
   annotations:
     deployment.kubernetes.io/revision: "1"
 spec:
-  replicas: 1     # ← increase to shift more traffic to canary
+  replicas: 2     # ← increase to shift more traffic to canary
   selector:
     matchLabels:
       app:   sample-app-2
