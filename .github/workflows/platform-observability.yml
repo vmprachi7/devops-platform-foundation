@@ -1,0 +1,153 @@
+name: Platform Observability
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'observability/**'
+  workflow_dispatch:
+    inputs:
+      action:
+        description: 'Action to perform'
+        required: true
+        default: install-all
+        type: choice
+        options:
+          - install-all          # metrics-server + prometheus + loki
+          - metrics-server-only  # reinstall metrics-server only
+          - prometheus-only      # reinstall kube-prometheus-stack only
+          - loki-only            # reinstall loki only
+          - uninstall            # remove all observability components
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  RESOURCE_GROUP:  devops-platform-rg
+  CLUSTER_NAME:    devops-platform-aks
+  MONITORING_NS:   monitoring
+
+jobs:
+
+  observability:
+    name: ${{ github.event.inputs.action || 'install-all' }}
+    runs-on: ubuntu-latest
+    environment: production
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # OIDC login — no stored credentials
+      - name: Azure login
+        uses: azure/login@v3
+        with:
+          client-id:       ${{ secrets.ARM_CLIENT_ID }}
+          tenant-id:       ${{ secrets.ARM_TENANT_ID }}
+          subscription-id: ${{ secrets.ARM_SUBSCRIPTION_ID }}
+
+      - name: Get AKS credentials
+        uses: azure/aks-set-context@v3
+        with:
+          resource-group: ${{ env.RESOURCE_GROUP }}
+          cluster-name:   ${{ env.CLUSTER_NAME }}
+
+      - name: Verify cluster is reachable
+        run: |
+          kubectl get nodes
+          echo "✅ Cluster reachable"
+
+      # ── Add Helm repos (always needed) ──────────────────
+      - name: Add Helm repos
+        if: github.event.inputs.action != 'uninstall'
+        run: |
+          helm repo add prometheus-community \
+            https://prometheus-community.github.io/helm-charts
+          helm repo add grafana https://grafana.github.io/helm-charts
+          helm repo update
+          echo "✅ Helm repos ready"
+
+      # ── metrics-server ───────────────────────────────────
+      - name: Install metrics-server
+        if: |
+          github.event.inputs.action == 'install-all' ||
+          github.event.inputs.action == 'metrics-server-only' ||
+          github.event_name == 'push'
+        run: |
+          # Using local manifest — avoids upstream resource limit conflicts
+          # Contains --kubelet-insecure-tls for AKS self-signed certs
+          kubectl apply --server-side --force-conflicts \
+            -f observability/metrics-server.yaml
+
+          kubectl wait --for=condition=ready pod \
+            -l k8s-app=metrics-server \
+            -n kube-system --timeout=120s
+
+          echo "✅ metrics-server ready"
+          kubectl top nodes
+
+      # ── Prometheus + Grafana ─────────────────────────────
+      - name: Install Prometheus + Grafana
+        if: |
+          github.event.inputs.action == 'install-all' ||
+          github.event.inputs.action == 'prometheus-only' ||
+          github.event_name == 'push'
+        run: |
+          kubectl create namespace ${{ env.MONITORING_NS }} \
+            --dry-run=client -o yaml | kubectl apply -f -
+
+          helm upgrade --install kube-prometheus-stack \
+            prometheus-community/kube-prometheus-stack \
+            --namespace ${{ env.MONITORING_NS }} \
+            --values observability/prometheus/values.yaml \
+            --atomic \
+            --cleanup-on-fail \
+            --wait \
+            --timeout 15m
+
+          echo "✅ Prometheus + Grafana ready"
+
+      # ── Loki ─────────────────────────────────────────────
+      - name: Install Loki
+        if: |
+          github.event.inputs.action == 'install-all' ||
+          github.event.inputs.action == 'loki-only' ||
+          github.event_name == 'push'
+        run: |
+          kubectl create namespace ${{ env.MONITORING_NS }} \
+            --dry-run=client -o yaml | kubectl apply -f -
+
+          helm upgrade --install loki grafana/loki-stack \
+            --namespace ${{ env.MONITORING_NS }} \
+            --values observability/loki/values.yaml \
+            --atomic \
+            --wait \
+            --timeout 10m
+
+          echo "✅ Loki ready"
+
+      # ── Uninstall (manual only) ───────────────────────────
+      - name: Uninstall observability stack
+        if: github.event.inputs.action == 'uninstall'
+        run: |
+          helm uninstall kube-prometheus-stack \
+            --namespace ${{ env.MONITORING_NS }} || true
+          helm uninstall loki \
+            --namespace ${{ env.MONITORING_NS }} || true
+          kubectl delete -f observability/metrics-server.yaml || true
+          echo "✅ Observability stack removed"
+
+      # ── Final status ─────────────────────────────────────
+      - name: Show status
+        if: github.event.inputs.action != 'uninstall'
+        run: |
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "  Observability stack status"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          kubectl get pods -n ${{ env.MONITORING_NS }}
+          echo ""
+          kubectl get pods -n kube-system -l k8s-app=metrics-server
+          echo ""
+          echo "Access locally:"
+          echo "  Grafana: kubectl port-forward -n monitoring svc/kube-prometheus-stack-grafana 3000:80"
+          echo "  URL:     http://localhost:3000   admin / admin123"

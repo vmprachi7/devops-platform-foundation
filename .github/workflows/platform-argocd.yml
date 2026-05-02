@@ -1,0 +1,153 @@
+name: Platform ArgoCD
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'gitops/**'
+  workflow_dispatch:
+    inputs:
+      action:
+        description: 'Action to perform'
+        required: true
+        default: install
+        type: choice
+        options:
+          - install          # fresh install of ArgoCD + register repo + apply app CRDs
+          - sync-apps        # just sync all ArgoCD apps (cluster must be up)
+          - register-repo    # re-register the GitHub repo (fix auth issues)
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  RESOURCE_GROUP: devops-platform-rg
+  CLUSTER_NAME:   devops-platform-aks
+  ARGOCD_VERSION: v2.10.0
+
+jobs:
+
+  argocd:
+    name: ${{ github.event.inputs.action || 'sync-apps' }}
+    runs-on: ubuntu-latest
+    environment: production
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # OIDC login — no stored credentials
+      - name: Azure login
+        uses: azure/login@v3
+        with:
+          client-id:       ${{ secrets.ARM_CLIENT_ID }}
+          tenant-id:       ${{ secrets.ARM_TENANT_ID }}
+          subscription-id: ${{ secrets.ARM_SUBSCRIPTION_ID }}
+
+      - name: Get AKS credentials
+        uses: azure/aks-set-context@v3
+        with:
+          resource-group: ${{ env.RESOURCE_GROUP }}
+          cluster-name:   ${{ env.CLUSTER_NAME }}
+
+      - name: Verify cluster is reachable
+        run: |
+          kubectl get nodes
+          echo "✅ Cluster reachable"
+
+      # ── Install ArgoCD (fresh install or reinstall) ──────
+      - name: Install ArgoCD
+        if: |
+          github.event.inputs.action == 'install' ||
+          github.event_name == 'push'
+        run: |
+          kubectl create namespace argocd --dry-run=client -o yaml | kubectl apply -f -
+
+          # --server-side handles large CRDs like ApplicationSets
+          kubectl apply --server-side --force-conflicts -n argocd \
+            -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
+
+          echo "Waiting for ArgoCD server to be ready..."
+          kubectl wait --for=condition=ready pod \
+            -l app.kubernetes.io/name=argocd-server \
+            -n argocd --timeout=180s
+
+          echo "✅ ArgoCD installed"
+
+      # ── Install ArgoCD CLI ───────────────────────────────
+      - name: Install ArgoCD CLI
+        run: |
+          curl -sSL -o /usr/local/bin/argocd \
+            https://github.com/argoproj/argo-cd/releases/latest/download/argocd-linux-amd64
+          chmod +x /usr/local/bin/argocd
+          argocd version --client
+
+      # ── Login to ArgoCD ──────────────────────────────────
+      - name: Login to ArgoCD
+        run: |
+          kubectl port-forward svc/argocd-server -n argocd 8080:443 &
+          sleep 8
+
+          PASS=$(kubectl -n argocd get secret argocd-initial-admin-secret \
+            -o jsonpath="{.data.password}" | base64 -d)
+
+          argocd login localhost:8080 \
+            --username admin \
+            --password "$PASS" \
+            --insecure
+
+          echo "✅ Logged into ArgoCD"
+
+      # ── Register GitHub repo (public — no credentials) ──
+      - name: Register GitHub repo
+        if: |
+          github.event.inputs.action == 'install' ||
+          github.event.inputs.action == 'register-repo' ||
+          github.event_name == 'push'
+        run: |
+          # Public repo — register without credentials
+          # Do NOT use GITHUB_TOKEN here — it expires after the run
+          # and causes "authentication required" on subsequent syncs
+          argocd repo add https://github.com/${{ github.repository }} || true
+
+          echo "Registered repos:"
+          argocd repo list
+
+      # ── Apply all ArgoCD Application CRDs ───────────────
+      - name: Apply ArgoCD Application manifests
+        if: |
+          github.event.inputs.action == 'install' ||
+          github.event_name == 'push'
+        run: |
+          # Apply all Application CRDs from gitops/argocd-apps/
+          # These tell ArgoCD what to watch and where to deploy
+          kubectl apply -f gitops/argocd-apps/ --recursive
+
+          echo "Registered applications:"
+          argocd app list
+
+      # ── Sync all apps (any trigger) ──────────────────────
+      - name: Sync all ArgoCD apps
+        run: |
+          # Wait a moment for apps to register
+          sleep 5
+
+          # Sync each app — || true so one failure doesn't block others
+          argocd app sync sample-app-1 --timeout 90 || true
+          argocd app sync sample-app-2 --timeout 90 || true
+
+          echo ""
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "  Final app status"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          argocd app list
+
+      # ── Verify pods healthy ──────────────────────────────
+      - name: Verify app pods
+        run: |
+          echo "sample-app-1 pods:"
+          kubectl get pods -n sample-app-1 2>/dev/null || echo "namespace not ready yet"
+
+          echo ""
+          echo "sample-app-2 pods:"
+          kubectl get pods -n sample-app-2 2>/dev/null || echo "namespace not ready yet"
