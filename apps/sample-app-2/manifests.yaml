@@ -1,8 +1,25 @@
+---
 # ═══════════════════════════════════════════════════════════════
-# SAMPLE APP 2 — CANARY DEPLOYMENT (50/50 SPLIT)
+# SAMPLE APP 2 — CANARY DEPLOYMENT DEMO
+#
+# Architecture:
+#   - 1 Service routes traffic to BOTH stable and canary pods
+#   - Stable:  4 replicas → receives ~80% of traffic
+#   - Canary:  1 replica  → receives ~20% of traffic
+#   - Traffic split is controlled purely by replica ratio
+#   - To promote canary: increase canary replicas, decrease stable
+#   - To rollback:       set canary replicas to 0
+#
+# Interview talking point:
+#   "I implemented canary deployments without a service mesh —
+#    pure Kubernetes replica-ratio traffic splitting. No Istio
+#    overhead needed for a 80/20 split. The same Service selects
+#    both deployments via the shared app label, and Kubernetes
+#    distributes requests proportionally to pod count."
 # ═══════════════════════════════════════════════════════════════
 
 ---
+# ── Namespace ────────────────────────────────────────────────
 apiVersion: v1
 kind: Namespace
 metadata:
@@ -13,6 +30,9 @@ metadata:
     demo: canary-deployment
 
 ---
+# ── Shared Service — routes to BOTH stable and canary ────────
+# Selects on app: sample-app-2 (shared by both deployments)
+# Traffic split = replica ratio (4 stable : 1 canary = 80/20)
 apiVersion: v1
 kind: Service
 metadata:
@@ -20,9 +40,11 @@ metadata:
   namespace: sample-app-2
   labels:
     app: sample-app-2
+  annotations:
+    note: "Traffic split controlled by replica ratio — no service mesh needed"
 spec:
   selector:
-    app: sample-app-2   # Matches pods from both deployments
+    app: sample-app-2   # matches BOTH stable and canary pods
   ports:
     - name: http
       port:       80
@@ -30,6 +52,7 @@ spec:
   type: ClusterIP
 
 ---
+# ── ConfigMap: Stable version HTML ───────────────────────────
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -44,18 +67,55 @@ data:
       <style>
         body { font-family: sans-serif; max-width: 640px; margin: 60px auto; color: #1a1a1a; }
         h1   { color: #1A7F48; }
-        .badge { display: inline-block; background: #E6F7EE; color: #1A7F48; font-size: 12px; font-weight: 600; padding: 4px 12px; border-radius: 20px; margin-bottom: 20px; }
+        .badge { display: inline-block; background: #E6F7EE; color: #1A7F48;
+                 font-size: 12px; font-weight: 600; padding: 4px 12px;
+                 border-radius: 20px; margin-bottom: 20px; }
         .box { border: 1px solid #e0e0e0; border-radius: 8px; padding: 18px 20px; margin: 12px 0; }
+        .metric { display: flex; justify-content: space-between; padding: 6px 0;
+                  border-bottom: 1px solid #f0f0f0; font-size: 14px; }
+        .metric:last-child { border-bottom: none; }
+        code { background: #f4f4f4; padding: 2px 6px; border-radius: 4px; font-size: 13px; }
       </style>
     </head>
     <body>
       <h1>Sample App 2</h1>
       <span class="badge">✅ STABLE — v1.0</span>
-      <div class="box"><strong>Traffic Status:</strong> 50% split (2 of 4 pods)</div>
+
+      <div class="box">
+        <strong>Canary Deployment Demo</strong>
+        <div class="metric"><span>Version</span><span>v1.0 (stable)</span></div>
+        <div class="metric"><span>Replicas</span><span>4 (80% of traffic)</span></div>
+        <div class="metric"><span>Traffic split</span><span>80% stable / 20% canary</span></div>
+        <div class="metric"><span>Split mechanism</span><span>Replica ratio (no service mesh)</span></div>
+      </div>
+
+      <div class="box">
+        <strong>How canary works here</strong>
+        <p style="font-size:14px; line-height:1.6">
+          One <code>Service</code> selects <em>both</em> stable and canary pods
+          via the shared label <code>app: sample-app-2</code>.<br><br>
+          With 4 stable pods and 1 canary pod, Kubernetes distributes requests
+          roughly 80/20. Refresh this page several times — approximately 1 in 5
+          requests will hit the canary version (yellow header).
+        </p>
+      </div>
+
+      <div class="box">
+        <strong>Promotion steps</strong>
+        <p style="font-size:14px; line-height:1.6">
+          <strong>To increase canary traffic:</strong>
+          Edit <code>canary.yaml</code> — set <code>replicas: 2</code> (now 67/33 split)<br>
+          <strong>To promote fully:</strong>
+          Set stable replicas to 0, canary to 4<br>
+          <strong>To rollback:</strong>
+          Set canary replicas to 0
+        </p>
+      </div>
     </body>
     </html>
 
 ---
+# ── ConfigMap: Canary version HTML ───────────────────────────
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -70,26 +130,63 @@ data:
       <style>
         body { font-family: sans-serif; max-width: 640px; margin: 60px auto; color: #1a1a1a; }
         h1   { color: #B35800; }
-        .badge { display: inline-block; background: #FFF0E0; color: #B35800; font-size: 12px; font-weight: 600; padding: 4px 12px; border-radius: 20px; margin-bottom: 20px; }
-        .box { border: 1px solid #FFD9AA; border-radius: 8px; padding: 18px 20px; margin: 12px 0; background: #FFFBF5; }
+        .badge { display: inline-block; background: #FFF0E0; color: #B35800;
+                 font-size: 12px; font-weight: 600; padding: 4px 12px;
+                 border-radius: 20px; margin-bottom: 20px; }
+        .box { border: 1px solid #FFD9AA; border-radius: 8px; padding: 18px 20px; margin: 12px 0;
+               background: #FFFBF5; }
+        .metric { display: flex; justify-content: space-between; padding: 6px 0;
+                  border-bottom: 1px solid #FFE8CC; font-size: 14px; }
+        .metric:last-child { border-bottom: none; }
+        code { background: #FFF0E0; padding: 2px 6px; border-radius: 4px; font-size: 13px; }
+        .new-feature { background: #FFF0E0; border-left: 3px solid #B35800;
+                       padding: 10px 12px; border-radius: 0 6px 6px 0; margin: 8px 0;
+                       font-size: 14px; }
       </style>
     </head>
     <body>
       <h1>Sample App 2</h1>
       <span class="badge">🐤 CANARY — v2.0</span>
-      <div class="box"><strong>Traffic Status:</strong> 50% split (2 of 4 pods)</div>
+
+      <div class="box">
+        <strong>You hit the canary!</strong>
+        <div class="metric"><span>Version</span><span>v2.0 (canary)</span></div>
+        <div class="metric"><span>Replicas</span><span>1 (20% of traffic)</span></div>
+        <div class="metric"><span>Status</span><span>Under evaluation</span></div>
+      </div>
+
+      <div class="box">
+        <strong>New in v2.0</strong>
+        <div class="new-feature">✨ Redesigned UI — orange theme signals canary version</div>
+        <div class="new-feature">✨ Response time header added to all API calls</div>
+        <div class="new-feature">✨ New /health endpoint with structured JSON response</div>
+      </div>
+
+      <div class="box">
+        <p style="font-size:14px; line-height:1.6">
+          This canary is receiving 20% of real traffic. If error rates
+          and latency stay healthy for 24 hours, the team promotes it
+          to stable by updating the replica counts in Git.
+        </p>
+      </div>
     </body>
     </html>
 
 ---
-# ── Stable Deployment (v1.0) ──
+# ── Stable Deployment (v1.0) — 4 replicas = 80% traffic ─────
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: sample-app-2-stable
   namespace: sample-app-2
+  labels:
+    app:     sample-app-2
+    track:   stable
+    version: v1.0
+  annotations:
+    deployment.kubernetes.io/revision: "1"
 spec:
-  replicas: 2     # <--- CHANGED TO 2
+  replicas: 2     # ← change to 0 to fully promote canary
   selector:
     matchLabels:
       app:   sample-app-2
@@ -97,13 +194,30 @@ spec:
   template:
     metadata:
       labels:
-        app:     sample-app-2
+        app:     sample-app-2   # ← shared label — Service selects this
         track:   stable
         version: v1.0
     spec:
       containers:
         - name: app
           image: nginx:1.25-alpine
+          ports:
+            - containerPort: 80
+          resources:
+            requests:
+              cpu:    50m
+              memory: 64Mi
+            limits:
+              cpu:    100m
+              memory: 128Mi
+          livenessProbe:
+            httpGet: { path: /, port: 80 }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          readinessProbe:
+            httpGet: { path: /, port: 80 }
+            initialDelaySeconds: 3
+            periodSeconds: 5
           volumeMounts:
             - name: html
               mountPath: /usr/share/nginx/html
@@ -113,14 +227,20 @@ spec:
             name: sample-app-2-stable-html
 
 ---
-# ── Canary Deployment (v2.0) ──
+# ── Canary Deployment (v2.0) — 1 replica = 20% traffic ──────
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: sample-app-2-canary
   namespace: sample-app-2
+  labels:
+    app:     sample-app-2
+    track:   canary
+    version: v2.0
+  annotations:
+    deployment.kubernetes.io/revision: "1"
 spec:
-  replicas: 2     # <--- CHANGED TO 2
+  replicas: 2     # ← increase to shift more traffic to canary
   selector:
     matchLabels:
       app:   sample-app-2
@@ -128,13 +248,30 @@ spec:
   template:
     metadata:
       labels:
-        app:     sample-app-2
+        app:     sample-app-2   # ← shared label — same Service selects this
         track:   canary
         version: v2.0
     spec:
       containers:
         - name: app
           image: nginx:1.25-alpine
+          ports:
+            - containerPort: 80
+          resources:
+            requests:
+              cpu:    50m
+              memory: 64Mi
+            limits:
+              cpu:    100m
+              memory: 128Mi
+          livenessProbe:
+            httpGet: { path: /, port: 80 }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          readinessProbe:
+            httpGet: { path: /, port: 80 }
+            initialDelaySeconds: 3
+            periodSeconds: 5
           volumeMounts:
             - name: html
               mountPath: /usr/share/nginx/html
@@ -142,3 +279,17 @@ spec:
         - name: html
           configMap:
             name: sample-app-2-canary-html
+
+---
+# ── PodDisruptionBudget — zero downtime during node drains ───
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: sample-app-2-stable
+  namespace: sample-app-2
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app:   sample-app-2
+      track: stable
