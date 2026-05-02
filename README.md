@@ -45,8 +45,10 @@ devops-platform-foundation/          finops-intelligence-engine/
 devops-platform-foundation/
 ├── .github/
 │   └── workflows/
-│       ├── platform-infra.yml     Terraform + ArgoCD + Observability
-│       └── platform-apps.yml      Sample app deployments only
+│       ├── platform-terraform.yml     Terraform only — plan on PR, apply on approval
+│       ├── platform-argocd.yml        ArgoCD install + app registration
+│       ├── platform-observability.yml Prometheus + Grafana + Loki
+│       └── platform-apps.yml          Sample app deployments only
 │
 ├── terraform/
 │   └── environments/dev/
@@ -200,7 +202,7 @@ terraform apply -auto-approve
 | Container Registry | `devopsplatformacr` | Basic SKU |
 | Log Analytics | `devops-platform-aks-logs` | 30-day retention |
 
-![alt text](<images/Screenshot 2026-05-02 at 1.33.29 PM.png>)
+![alt text](<images/image1.png>)
 
 ### Step 7 — Configure kubectl
 
@@ -212,6 +214,7 @@ az aks get-credentials \
 kubectl get nodes
 # Expected: STATUS = Ready, VERSION = v1.34.x
 ```
+
 ![alt text](images/image.png)
 
 ### Step 8 — Install metrics-server
@@ -249,7 +252,7 @@ kubectl port-forward svc/argocd-server -n argocd 8080:443
 # Username: admin   Password: from above
 ```
 
-### Step 10 — Register repos + deploy apps
+### Step 10 — Register repo + deploy apps
 
 ```bash
 PASS=$(kubectl -n argocd get secret argocd-initial-admin-secret \
@@ -257,10 +260,8 @@ PASS=$(kubectl -n argocd get secret argocd-initial-admin-secret \
 
 argocd login localhost:8080 --username admin --password "$PASS" --insecure
 
-# Register this repo (use a GitHub PAT with repo scope)
-argocd repo add https://github.com/vmprachi7/devops-platform-foundation \
-  --username vmprachi7 \
-  --password YOUR_GITHUB_PAT
+# Public repo — no credentials needed
+argocd repo add https://github.com/vmprachi7/devops-platform-foundation
 
 # Deploy both sample apps
 kubectl apply -f gitops/argocd-apps/sample-app-1.yaml
@@ -269,8 +270,6 @@ kubectl apply -f gitops/argocd-apps/sample-app-2.yaml
 # Watch sync status
 argocd app list
 ```
-
-![alt text](images/image-9.png)
 
 ### Step 11 — Install observability stack
 
@@ -336,7 +335,6 @@ kubectl port-forward svc/sample-app-2 -n sample-app-2 8082:80
 
 ![alt text](images/image-3.png)
 
-
 ---
 
 ## Option B — Run via GitOps (GitHub Actions)
@@ -393,16 +391,31 @@ Go to: **repo → Settings → Environments → New environment**
 - Enable: Required reviewers → add yourself
 - This adds a manual approval gate before Terraform applies
 
-### Step 4 — Trigger platform infrastructure pipeline
+### Step 4 — How the three pipelines work
 
-Go to: **Actions → Platform Infrastructure → Run workflow → apply**
+The platform uses three independent pipelines — each owns a separate concern:
 
-This single run provisions everything:
-1. `terraform apply` → AKS + ACR + Log Analytics
-2. ArgoCD install + repo registration + ArgoCD Application CRDs
-3. metrics-server install
-4. Prometheus + Grafana + Loki via Helm
-5. Both sample apps deploy automatically via ArgoCD
+| Pipeline | File | Triggers | What it does |
+|---|---|---|---|
+| **Terraform** | `platform-terraform.yml` | `terraform/**` changes | Plan on PR → manual approval to apply |
+| **ArgoCD** | `platform-argocd.yml` | `gitops/**` changes or manual | Install ArgoCD, register repo, sync apps |
+| **Observability** | `platform-observability.yml` | `observability/**` changes or manual | Install metrics-server, Prometheus, Grafana, Loki |
+
+**Typical flow from scratch:**
+
+```
+1. Actions → Terraform → Run workflow → apply
+   (provisions AKS + ACR — requires production approval)
+
+2. Actions → Platform ArgoCD → Run workflow → install
+   (installs ArgoCD + registers repo + deploys sample apps)
+
+3. Actions → Platform Observability → Run workflow → install-all
+   (installs metrics-server + Prometheus + Grafana + Loki)
+```
+
+Each pipeline can be run independently — rerunning ArgoCD never touches Terraform,
+and rerunning Observability never touches ArgoCD.
 
 ![alt text](images/image-4.png)
 
@@ -477,11 +490,9 @@ git commit -m "rollback: remove canary"
 git push
 ```
 
-
 ![alt text](images/image-8.png)
 
 ![alt text](images/image-7.png)
-
 
 ---
 
@@ -502,7 +513,7 @@ terraform destroy -auto-approve
 # State preserved in Azure Blob — recreate anytime
 ```
 
-Or via GitHub Actions: **Actions → Platform Infrastructure → Run workflow → destroy**
+Or via GitHub Actions: **Actions → Terraform → Run workflow → destroy**
 
 **One-command recreate after destroy:**
 ```bash
@@ -513,6 +524,8 @@ kubectl apply --server-side --force-conflicts -n argocd \
   -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml && \
 kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=argocd-server \
   -n argocd --timeout=180s && \
+argocd repo add https://github.com/vmprachi7/devops-platform-foundation && \
+kubectl apply -f gitops/argocd-apps/ && \
 kubectl apply --server-side --force-conflicts \
   -f observability/metrics-server.yaml && \
 kubectl create namespace monitoring && \
@@ -521,8 +534,7 @@ helm upgrade --install kube-prometheus-stack \
   --namespace monitoring --values observability/prometheus/values.yaml \
   --atomic --wait --timeout 15m && \
 helm upgrade --install loki grafana/loki-stack --namespace monitoring \
-  --values observability/loki/values.yaml --atomic --wait --timeout 10m && \
-kubectl apply -f gitops/argocd-apps/
+  --values observability/loki/values.yaml --atomic --wait --timeout 10m
 ```
 
 ---
@@ -577,6 +589,12 @@ kubectl apply -f gitops/argocd-apps/
 > "Terraform state lives in Azure Blob with lease-based locking. State survives
 > terraform destroy — so recreating the cluster is always a clean apply,
 > never a 'resource already exists' error."
+
+**On pipeline separation:**
+> "I split infrastructure provisioning, ArgoCD, and observability into three
+> independent pipelines. A change to Prometheus values never triggers a
+> Terraform plan. A broken ArgoCD install never blocks an observability
+> reinstall. Each pipeline can be re-run independently without side effects."
 
 ---
 
