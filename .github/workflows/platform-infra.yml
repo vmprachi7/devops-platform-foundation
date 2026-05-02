@@ -167,6 +167,12 @@ jobs:
           echo "✅ ArgoCD ready"
 
 
+# ── Fix: Register repo with ArgoCD ──────────────────────
+      # For a PUBLIC repo — no credentials needed at all
+      # GITHUB_TOKEN from pipeline is short-lived and expires after the run
+      # Using --username/--password with GITHUB_TOKEN causes this exact error
+      # on subsequent ArgoCD sync attempts
+
       - name: Login to ArgoCD + register repos + apply app CRDs
         run: |
           PASS=$(kubectl -n argocd get secret argocd-initial-admin-secret \
@@ -181,15 +187,18 @@ jobs:
           argocd login localhost:8080 \
             --username admin --password "$PASS" --insecure
 
-          # Register platform repo
+          # PUBLIC repo — register WITHOUT credentials
+          # ArgoCD can clone public repos over HTTPS without auth
           argocd repo add https://github.com/${{ github.repository }} \
-            --username ${{ github.repository_owner }} \
-            --password ${{ secrets.GITHUB_TOKEN }} || true
+            --username "" \
+            --password "" || true
 
           # Apply sample app ArgoCD Application CRDs
           kubectl apply -f gitops/argocd-apps/sample-app-1.yaml
           kubectl apply -f gitops/argocd-apps/sample-app-2.yaml
 
+          # Verify repo is connected
+          argocd repo list
           argocd app list
           echo "✅ ArgoCD apps registered"
 
