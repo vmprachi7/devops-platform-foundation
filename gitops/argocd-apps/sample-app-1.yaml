@@ -16,7 +16,7 @@ metadata:
 spec:
   project: default
   source:
-    repoURL:        https://github.com/YOUR_USERNAME/devops-platform-foundation
+    repoURL:        https://github.com/vmprachi7/devops-platform-foundation
     targetRevision: main
     path:           apps/sample-app-1
   destination:
