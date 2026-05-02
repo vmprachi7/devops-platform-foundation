@@ -200,7 +200,7 @@ terraform apply -auto-approve
 | Container Registry | `devopsplatformacr` | Basic SKU |
 | Log Analytics | `devops-platform-aks-logs` | 30-day retention |
 
-![alt text](<Screenshot 2026-05-02 at 1.33.29 PM.png>)
+![alt text](<images/Screenshot 2026-05-02 at 1.33.29 PM.png>)
 
 ### Step 7 — Configure kubectl
 
@@ -212,7 +212,7 @@ az aks get-credentials \
 kubectl get nodes
 # Expected: STATUS = Ready, VERSION = v1.34.x
 ```
-![alt text](image.png)
+![alt text](images/image.png)
 
 ### Step 8 — Install metrics-server
 
@@ -270,7 +270,7 @@ kubectl apply -f gitops/argocd-apps/sample-app-2.yaml
 argocd app list
 ```
 
-![alt text](image-1.png)
+![alt text](images/image-9.png)
 
 ### Step 11 — Install observability stack
 
@@ -332,9 +332,9 @@ kubectl port-forward svc/sample-app-2 -n sample-app-2 8082:80
 # http://localhost:8082  (refresh several times to hit canary)
 ```
 
-![alt text](image-2.png)
+![alt text](images/image-2.png)
 
-![alt text](image-3.png)
+![alt text](images/image-3.png)
 
 
 ---
@@ -404,7 +404,7 @@ This single run provisions everything:
 4. Prometheus + Grafana + Loki via Helm
 5. Both sample apps deploy automatically via ArgoCD
 
-![alt text](image-4.png)
+![alt text](images/image-4.png)
 
 ### Step 5 — Watch GitOps in action
 
@@ -441,9 +441,9 @@ bash apps/sample-app-1/load-test.sh
 3. HPA adds pods immediately (up to 6)
 4. Load stops → HPA removes pods after 60s stabilisation window
 
-![alt text](image-5.png)
+![alt text](images/image-5.png)
 
-![alt text](image-6.png)
+![alt text](images/image-6.png)
 
 ---
 
@@ -477,10 +477,10 @@ git commit -m "rollback: remove canary"
 git push
 ```
 
-![alt text](image-7.png)
 
-![alt text](image-8.png)
+![alt text](images/image-8.png)
 
+![alt text](images/image-7.png)
 
 
 ---
