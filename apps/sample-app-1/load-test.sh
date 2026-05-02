@@ -22,7 +22,7 @@ set -e
 NAMESPACE="sample-app-1"
 SERVICE="sample-app-1"
 DURATION="${1:-120}"   # default 120 seconds, override with: bash load-test.sh 60
-CONCURRENCY=50
+CONCURRENCY=700
 
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "  HPA Load Test — Sample App 1"
