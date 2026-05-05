@@ -133,7 +133,7 @@ spec:
             - name: html
               mountPath: /usr/share/nginx/html
       volumes:
-        - name: html1
+        - name: html
           configMap:
             name: sample-app-1-html
 
