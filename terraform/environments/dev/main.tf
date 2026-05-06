@@ -89,9 +89,6 @@ resource "azurerm_storage_account" "test_insecure" {
   location                 = var.location
   account_tier             = "Standard"
   account_replication_type = "LRS"
-
-  # ❌ BAD — these will trigger security findings:
-  allow_blob_public_access  = true     # Checkov: CKV_AZURE_59
   min_tls_version           = "TLS1_0" # tfsec: azure-storage-min-tls
   enable_https_traffic_only = false    # Checkov: CKV_AZURE_3
 }
