@@ -82,13 +82,13 @@ resource "azurerm_role_assignment" "aks_acr" {
 }
 
 # TEST — deliberately misconfigured storage account
-# This will be caught by Checkov + tfsec shift-left scan
 resource "azurerm_storage_account" "test_insecure" {
-  name                      = "testinsecureprachi7"
-  resource_group_name       = azurerm_resource_group.main.name
-  location                  = var.location
-  account_tier              = "Standard"
-  account_replication_type  = "LRS"
-  min_tls_version           = "TLS1_0"
-  enable_https_traffic_only = false    
+  name                     = "testinsecureprachi7"
+  resource_group_name      = azurerm_resource_group.main.name
+  location                 = var.location
+  account_tier             = "Standard"
+  account_replication_type = "LRS"
+  allow_blob_public_access  = true     # CKV_AZURE_59 — HIGH
+  enable_https_traffic_only = false    # CKV_AZURE_3  — HIGH
+  min_tls_version           = "TLS1_0" # tfsec finding
 }
