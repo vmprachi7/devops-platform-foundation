@@ -89,6 +89,6 @@ resource "azurerm_storage_account" "test_insecure" {
   location                  = var.location
   account_tier              = "Standard"
   account_replication_type  = "LRS"
-  min_tls_version           = "TLS1_0" # tfsec: azure-storage-min-tls
-  enable_https_traffic_only = false    # Checkov: CKV_AZURE_3
+  min_tls_version           = "TLS1_0"
+  enable_https_traffic_only = false    
 }
