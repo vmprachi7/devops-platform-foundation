@@ -82,13 +82,37 @@ resource "azurerm_role_assignment" "aks_acr" {
 }
 
 # TEST — deliberately misconfigured storage account
+# These settings WILL be caught by Checkov 3.x + tfsec
+# Add to terraform/environments/dev/main.tf temporarily
+
 resource "azurerm_storage_account" "test_insecure" {
   name                     = "testinsecureprachi7"
   resource_group_name      = azurerm_resource_group.main.name
   location                 = var.location
   account_tier             = "Standard"
   account_replication_type = "LRS"
-  allow_blob_public_access  = true     # CKV_AZURE_59 — HIGH
-  enable_https_traffic_only = false    # CKV_AZURE_3  — HIGH
-  min_tls_version           = "TLS1_0" # tfsec finding
+
+  # ❌ CKV_AZURE_59 — HIGH: enables public blob access
+  allow_blob_public_access = true
+
+  # ❌ CKV2_AZURE_38 — HIGH: disables HTTPS only traffic  
+  https_traffic_only_enabled = false
+
+  # ❌ CKV_AZURE_44 — MEDIUM: old TLS version
+  min_tls_version = "TLS1_0"
+
+  # ❌ CKV2_AZURE_1 — MEDIUM: no customer managed key
+  # (no encryption block = uses Microsoft managed keys only)
+
+  # ❌ CKV_AZURE_33 — LOW: no storage logging
+  blob_properties {
+    # No delete_retention_policy = CKV_AZURE_240
+  }
+
+  network_rules {
+    # ❌ CKV_AZURE_35 — MEDIUM: default allow (not deny)
+    default_action = "Allow"
+    bypass         = ["AzureServices"]
+  }
 }
+
