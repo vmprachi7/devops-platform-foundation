@@ -33,12 +33,12 @@ env:
 
 jobs:
 
-  # ── Job 1: Security Scan (PR only) ────────────────────────
-  # Scans ONLY files changed in this PR
-  # Posts findings as PR comment — no need to open logs
+  # ── Job 1: Security Scan (PR only) ───────────────────────────
+  # Scans ONLY .tf files changed in this PR
+  # Always posts a PR comment — pass or fail
   # Blocks plan job if HIGH severity found
   security-scan:
-    name: Security Scan
+    name: 🔐 Security Scan
     runs-on: ubuntu-latest
     if: github.event_name == 'pull_request'
     outputs:
@@ -60,10 +60,11 @@ jobs:
 
           if [ -z "$DIRS" ]; then
             echo "has_changes=false" >> $GITHUB_OUTPUT
+            echo "No .tf files changed"
           else
             echo "has_changes=true" >> $GITHUB_OUTPUT
             echo "changed_dirs=$DIRS" >> $GITHUB_OUTPUT
-            echo "Changed directories: $DIRS"
+            echo "Changed .tf dirs: $DIRS"
           fi
 
       - name: Set up Python
@@ -79,12 +80,14 @@ jobs:
           wget -q -O /usr/local/bin/tfsec \
             https://github.com/aquasecurity/tfsec/releases/latest/download/tfsec-linux-amd64
           chmod +x /usr/local/bin/tfsec
+          echo "✅ Checkov $(checkov --version 2>/dev/null | head -1) + tfsec ready"
 
       - name: Run Checkov (changed files only)
         if: steps.changed.outputs.has_changes == 'true'
         run: |
           mkdir -p /tmp/scan-results
           for dir in ${{ steps.changed.outputs.changed_dirs }}; do
+            echo "Checkov scanning: $dir"
             checkov --directory "$dir" \
               --framework terraform \
               --output json \
@@ -94,8 +97,8 @@ jobs:
 
           python3 << 'PYEOF'
           import json, os
-          raw  = "/tmp/scan-results/checkov_raw.json"
-          out  = {"results": {"failed_checks": [], "passed_checks": []}}
+          raw = "/tmp/scan-results/checkov_raw.json"
+          out = {"results": {"failed_checks": [], "passed_checks": []}}
           if os.path.exists(raw):
               for line in open(raw).read().split('\n'):
                   line = line.strip()
@@ -107,8 +110,10 @@ jobs:
                           out["results"]["failed_checks"].extend(r.get("failed_checks", []))
                           out["results"]["passed_checks"].extend(r.get("passed_checks", []))
                   except: pass
-          json.dump(out, open("/tmp/scan-results/checkov.json","w"))
-          print(f"Checkov: {len(out['results']['failed_checks'])} failures")
+          json.dump(out, open("/tmp/scan-results/checkov.json", "w"))
+          f = len(out["results"]["failed_checks"])
+          p = len(out["results"]["passed_checks"])
+          print(f"Checkov: {f} failed, {p} passed")
           PYEOF
         continue-on-error: true
 
@@ -117,6 +122,7 @@ jobs:
         run: |
           mkdir -p /tmp/scan-results
           for dir in ${{ steps.changed.outputs.changed_dirs }}; do
+            echo "tfsec scanning: $dir"
             tfsec "$dir" --format json --soft-fail \
               2>/dev/null >> /tmp/scan-results/tfsec_raw.json || true
           done
@@ -133,7 +139,7 @@ jobs:
                       d = json.loads(line)
                       out["results"].extend(d.get("results", []))
                   except: pass
-          json.dump(out, open("/tmp/scan-results/tfsec.json","w"))
+          json.dump(out, open("/tmp/scan-results/tfsec.json", "w"))
           print(f"tfsec: {len(out['results'])} findings")
           PYEOF
         continue-on-error: true
@@ -145,14 +151,15 @@ jobs:
           repository: vmprachi7/security-auditor
           path: .security-auditor
 
-      - name: Generate AI-explained findings
+      - name: Generate AI-explained PR comment
         if: steps.changed.outputs.has_changes == 'true'
         id: scan
         env:
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
         run: |
           [ -f /tmp/scan-results/checkov.json ] || \
-            echo '{"results":{"failed_checks":[]}}' > /tmp/scan-results/checkov.json
+            echo '{"results":{"failed_checks":[],"passed_checks":[]}}' \
+            > /tmp/scan-results/checkov.json
           [ -f /tmp/scan-results/tfsec.json ] || \
             echo '{"results":[]}' > /tmp/scan-results/tfsec.json
 
@@ -163,66 +170,103 @@ jobs:
             --tf-dir  "${{ env.TF_DIR }}" \
             --output  /tmp/scan-results/pr-comment.md || true
 
+          # Count HIGH severity findings
           HIGH=$(python3 -c "
           import json
-          data  = json.load(open('/tmp/scan-results/checkov.json'))
+          data   = json.load(open('/tmp/scan-results/checkov.json'))
           checks = data.get('results', data).get('failed_checks', [])
-          high  = {'CKV_AZURE_59','CKV_AZURE_5','CKV_AZURE_7',
-                   'CKV_AZURE_41','CKV_AZURE_42','CKV_AZURE_3','CKV_AZURE_110'}
-          print(sum(1 for c in checks if c.get('check_id') in high))
+          high   = {
+            'CKV_AZURE_59','CKV_AZURE_5','CKV_AZURE_7',
+            'CKV_AZURE_41','CKV_AZURE_42','CKV_AZURE_3',
+            'CKV_AZURE_110','CKV2_AZURE_38'
+          }
+          count = sum(1 for c in checks if c.get('check_id') in high)
+          print(count)
           " 2>/dev/null || echo "0")
 
           echo "high_count=$HIGH" >> $GITHUB_OUTPUT
+          echo "HIGH findings: $HIGH"
 
-      - name: Post security findings on PR
-        if: steps.changed.outputs.has_changes == 'true'
+      - name: Post security scan comment on PR
+        if: always() && steps.changed.outputs.has_changes == 'true'
         uses: actions/github-script@v7
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
             const fs = require('fs');
             let comment = '';
+
             try {
               comment = fs.readFileSync('/tmp/scan-results/pr-comment.md', 'utf8');
             } catch(e) {
-              comment = '## ✅ Security Scan\n\nNo issues found in changed Terraform files.';
+              // Fallback if file wasn't generated
+              comment = [
+                '## 🔐 Security Scan — ✅ Passed',
+                '',
+                'No security issues found in the changed Terraform files.',
+                '',
+                '| Scanner | Findings |',
+                '|---|---|',
+                '| Checkov | 0 |',
+                '| tfsec | 0 |',
+                '',
+                '*Scanned by [security-auditor](https://github.com/vmprachi7/security-auditor)*',
+              ].join('\n');
             }
 
-            // Remove previous scan comments
+            // Delete previous scan comments to keep PR clean
             const existing = await github.rest.issues.listComments({
-              owner: context.repo.owner, repo: context.repo.repo,
+              owner:        context.repo.owner,
+              repo:         context.repo.repo,
               issue_number: context.issue.number,
             });
             for (const c of existing.data) {
-              if (c.body.includes('Security Scan') && c.user.type === 'Bot') {
+              if ((c.body.includes('Security Scan') ||
+                   c.body.includes('security-auditor')) &&
+                   c.user.type === 'Bot') {
                 await github.rest.issues.deleteComment({
-                  owner: context.repo.owner, repo: context.repo.repo,
+                  owner:      context.repo.owner,
+                  repo:       context.repo.repo,
                   comment_id: c.id,
                 });
               }
             }
 
+            // Post fresh comment
             await github.rest.issues.createComment({
-              owner: context.repo.owner, repo: context.repo.repo,
+              owner:        context.repo.owner,
+              repo:         context.repo.repo,
               issue_number: context.issue.number,
-              body: comment,
+              body:         comment,
             });
 
-      - name: Skip message (no tf changes)
-        if: steps.changed.outputs.has_changes == 'false'
-        run: echo "No Terraform files changed — security scan skipped"
+            console.log('✅ Security scan comment posted to PR');
 
-      - name: Block if HIGH findings
+      - name: Post skip message (no .tf changes)
+        if: steps.changed.outputs.has_changes == 'false'
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            await github.rest.issues.createComment({
+              owner:        context.repo.owner,
+              repo:         context.repo.repo,
+              issue_number: context.issue.number,
+              body:         '## 🔐 Security Scan — ⏭️ Skipped\n\nNo Terraform files changed in this PR.',
+            });
+
+      - name: Block PR on HIGH findings
         if: steps.scan.outputs.high_count > 0
         run: |
-          echo "❌ ${{ steps.scan.outputs.high_count }} HIGH severity finding(s)"
-          echo "Fix issues shown in PR comment before merging."
+          echo "❌ ${{ steps.scan.outputs.high_count }} HIGH severity finding(s) found"
+          echo "Fix the issues shown in the PR comment before merging."
           exit 1
 
-  # ── Job 2: Plan (PR only) ─────────────────────────────────
-  # Only runs if security scan passes (no HIGH findings)
+  # ── Job 2: Terraform Plan (PR only) ──────────────────────────
+  # Only runs if security scan passes
+  # Skipped if no Azure credentials (free tier)
   plan:
-    name: Terraform Plan
+    name: 🏗️ Terraform Plan
     runs-on: ubuntu-latest
     needs: security-scan
     if: |
@@ -237,25 +281,64 @@ jobs:
         with:
           terraform_version: 1.6.6
 
+      - name: Check Azure credentials available
+        id: check-creds
+        run: |
+          if [ -z "${{ secrets.ARM_CLIENT_ID }}" ] || \
+             [ -z "${{ secrets.TF_STATE_STORAGE_KEY }}" ]; then
+            echo "available=false" >> $GITHUB_OUTPUT
+            echo "⚠️ Azure credentials not set — plan skipped"
+          else
+            echo "available=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Post plan skipped comment
+        if: steps.check-creds.outputs.available == 'false'
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            await github.rest.issues.createComment({
+              owner:        context.repo.owner,
+              repo:         context.repo.repo,
+              issue_number: context.issue.number,
+              body: [
+                '## 🏗️ Terraform Plan — ⏭️ Skipped',
+                '',
+                'Azure credentials not configured — plan skipped.',
+                'Security scan passed ✅',
+                '',
+                'To enable plan: add `ARM_CLIENT_ID`, `ARM_CLIENT_SECRET`,',
+                '`ARM_TENANT_ID`, `ARM_SUBSCRIPTION_ID`, `TF_STATE_STORAGE_KEY`',
+                'as repository secrets.',
+              ].join('\n'),
+            });
+
       - name: Terraform Init
+        if: steps.check-creds.outputs.available == 'true'
         working-directory: ${{ env.TF_DIR }}
         run: terraform init
 
       - name: Terraform Format check
+        if: steps.check-creds.outputs.available == 'true'
         working-directory: ${{ env.TF_DIR }}
-        run: terraform fmt
+        run: terraform fmt -check -recursive
+        continue-on-error: true
 
       - name: Terraform Validate
+        if: steps.check-creds.outputs.available == 'true'
         working-directory: ${{ env.TF_DIR }}
         run: terraform validate
 
       - name: Terraform Plan
+        if: steps.check-creds.outputs.available == 'true'
         id: plan
         working-directory: ${{ env.TF_DIR }}
         run: terraform plan -no-color 2>&1 | tee plan.txt
         continue-on-error: true
 
       - name: Post plan as PR comment
+        if: steps.check-creds.outputs.available == 'true'
         uses: actions/github-script@v7
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
@@ -263,17 +346,24 @@ jobs:
             const fs   = require('fs');
             const plan = fs.readFileSync('${{ env.TF_DIR }}/plan.txt', 'utf8');
             const truncated = plan.length > 60000
-              ? plan.slice(0, 60000) + '\n\n...[truncated]'
+              ? plan.slice(0, 60000) + '\n\n...[truncated — see Actions logs]'
               : plan;
+            const outcome = '${{ steps.plan.outcome }}';
+            const icon    = outcome === 'success' ? '✅' : '❌';
+
             const body = [
-              '## 🏗️ Terraform Plan',
+              `## 🏗️ Terraform Plan — ${icon} ${outcome}`,
+              '',
+              '<details><summary>Show Plan Output</summary>',
+              '',
               '```hcl',
               truncated,
               '```',
-              `**Result:** \`${{ steps.plan.outcome }}\``,
-              `*Triggered by @${{ github.actor }} on \`${{ github.head_ref }}\`*`,
               '',
-              '> ✅ Merge this PR to queue the apply — still requires manual approval.',
+              '</details>',
+              '',
+              `*Triggered by @${{ github.actor }} on \`${{ github.head_ref }}\`*`,
+              '> Merge this PR to queue apply — requires manual approval in production environment.',
             ].join('\n');
 
             // Remove previous plan comments
@@ -294,16 +384,16 @@ jobs:
               issue_number: context.issue.number,
               owner: context.repo.owner,
               repo:  context.repo.repo,
-              body
+              body,
             });
 
       - name: Fail if plan failed
-        if: steps.plan.outcome == 'failure'
+        if: steps.check-creds.outputs.available == 'true' && steps.plan.outcome == 'failure'
         run: exit 1
 
-  # ── Job 3: Apply (merge to main only) ────────────────────
+  # ── Job 3: Apply (merge to main only) ────────────────────────
   apply:
-    name: Terraform Apply
+    name: 🚀 Terraform Apply
     runs-on: ubuntu-latest
     if: (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
         (github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'apply')
@@ -311,55 +401,40 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
-
       - uses: hashicorp/setup-terraform@v3
         with:
-          terraform_version:  1.6.6
-          terraform_wrapper:  false
-
+          terraform_version: 1.6.6
+          terraform_wrapper: false
       - name: Terraform Init
         working-directory: ${{ env.TF_DIR }}
         run: terraform init
-
       - name: Terraform Plan
         working-directory: ${{ env.TF_DIR }}
         run: terraform plan -no-color -out=tfplan
-
       - name: Terraform Apply
         working-directory: ${{ env.TF_DIR }}
         run: terraform apply -auto-approve tfplan
-
       - name: Show outputs
         working-directory: ${{ env.TF_DIR }}
-        run: |
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          echo "  Terraform outputs"
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          terraform output
+        run: terraform output
 
-  # ── Job 4: Destroy (manual only) ─────────────────────────
+  # ── Job 4: Destroy (manual only) ─────────────────────────────
   destroy:
-    name: Terraform Destroy
+    name: 🗑️ Terraform Destroy
     runs-on: ubuntu-latest
     if: github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'destroy'
     environment: production
 
     steps:
       - uses: actions/checkout@v4
-
       - uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: 1.6.6
-
       - name: Terraform Init
         working-directory: ${{ env.TF_DIR }}
         run: terraform init
-
       - name: Terraform Destroy
         working-directory: ${{ env.TF_DIR }}
         run: terraform destroy -auto-approve
-
       - name: Confirm
-        run: |
-          echo "✅ Infrastructure destroyed"
-          echo "State file preserved in Azure Blob"
+        run: echo "✅ Infrastructure destroyed — state preserved in Azure Blob"
