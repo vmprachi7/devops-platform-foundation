@@ -555,8 +555,8 @@ helm upgrade --install loki grafana/loki-stack --namespace monitoring \
 | Repo | What it does | Status |
 |---|---|---|
 | [devops-platform-foundation](https://github.com/vmprachi7/devops-platform-foundation) | Platform base | ✅ This repo |
-| finops-intelligence-engine | Azure cost anomaly detection + AI | 🚧 In progress |
-| agentic-aiops | Autonomous observability + runbook AI | 🔜 Planned |
+| finops-intelligence-engine | Azure cost anomaly detection + AI | ✅ Done |
+| agentic-aiops | Autonomous observability + runbook AI | 🚧 In progress |
 
 ---
 
