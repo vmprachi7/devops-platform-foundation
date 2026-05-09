@@ -80,3 +80,31 @@ resource "azurerm_role_assignment" "aks_acr" {
   scope                            = azurerm_container_registry.acr.id
   skip_service_principal_aad_check = true
 }
+
+# TEST — deliberately misconfigured storage account
+# These settings WILL be caught by Checkov 3.x + tfsec
+# Add to terraform/environments/dev/main.tf temporarily
+
+resource "azurerm_storage_account" "test_insecure" {
+  name                     = "testinsecureprachi7"
+  resource_group_name      = azurerm_resource_group.main.name
+  location                 = var.location
+  account_tier             = "Standard"
+  account_replication_type = "LRS"
+
+  allow_blob_public_access = true
+
+  https_traffic_only_enabled = false
+
+  min_tls_version = "TLS1_0"
+
+  blob_properties {
+    # No delete_retention_policy = CKV_AZURE_240
+  }
+
+  network_rules {
+    default_action = "Allow"
+    bypass         = ["AzureServices"]
+  }
+}
+
