@@ -39,6 +39,35 @@ devops-platform-foundation/          finops-intelligence-engine/
 
 ---
 
+## Tool Stack
+
+| Layer | Tool | Version | Purpose |
+|---|---|---|---|
+| **Infrastructure** | Terraform | 1.6+ | IaC for AKS, ACR, networking, OIDC |
+| **Orchestration** | Kubernetes (AKS) | 1.34 | Container orchestration on Azure |
+| **Container Registry** | Azure Container Registry | - | Private image registry, integrated with AKS |
+| **GitOps** | ArgoCD | v2.x | Declarative, Git-driven deployment reconciliation |
+| **Package Management** | Helm | 3.x | Templated Kubernetes manifests for cluster components |
+| **Metrics & Monitoring** | Prometheus | via kube-prometheus-stack | Time-series metrics collection |
+| **Visualization** | Grafana | via kube-prometheus-stack | Dashboards for metrics, logs, tracing |
+| **Log Aggregation** | Loki | via loki-stack | Lightweight log storage and querying |
+| **Metrics Server** | metrics-server | v0.6+ | Pod resource metrics for HPA decisions |
+| **Infrastructure State** | Azure Blob Storage | - | Remote Terraform state with lease locking |
+| **Observability** | Log Analytics (Azure) | 30-day retention | CloudNative logs and diagnostics |
+| **CI/CD** | GitHub Actions | - | Workflow automation for Terraform, ArgoCD, observability |
+| **Identity & Security** | Workload Identity Federation | OIDC | Short-lived JWT auth from GitHub to Azure (no secrets stored) |
+
+### Why these tools?
+
+- **Terraform** over ARM templates: HCL is more readable and reusable across clouds
+- **ArgoCD** over Flux: Stronger UI, GitOps-native, easier multi-repo management
+- **Helm** over raw manifests: Reduces YAML boilerplate, enables config reuse
+- **Prometheus + Grafana + Loki** over Azure native observability: Lower cost, vendor-agnostic, self-hosted control
+- **Workload Identity Federation** over Service Principal secrets: Zero credential storage in pipelines, matches industry best practice
+- **Canary via replica ratio** over Istio/Linkerd: Simplicity—no service mesh operational overhead for 80/20 traffic split
+
+---
+
 ## Repository structure
 
 ```
